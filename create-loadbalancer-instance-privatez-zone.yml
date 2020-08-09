@@ -1,0 +1,315 @@
+AWSTemplateFormatVersion: '2010-09-09'
+###### PARAMETERS SECTION ######
+Parameters:
+  NetworkStackName:
+    Description: 'NetworkStackName which EC2 server resides'
+    Type: String
+  SZStackName:
+    Description: 'SZworkStackName which creates EC2 servers'
+    Type: String  
+  EnvType:
+    Description: Environment type
+    Default: dev
+    Type: String
+    AllowedValues:
+      - prod
+      - dr
+      - dev
+    ConstraintDescription: must specify prod or dev
+  EnvName:
+    Description: "Environment name"
+    Type: String
+    Default: "dev"
+ 
+  LBPrivateIpAddress1:
+    Default: ''
+    Description: 'An IP chosen from Valid CIDR block of a private subnet'
+    Type: String
+  LBPrivateIpAddress2:
+    Default: ''
+    Description: 'An IP chosen from Valid CIDR block of a private subnet'
+    Type: String  
+
+Conditions:
+  CreateProdResources: !Equals [ !Ref EnvType, prod ]
+  CreateNonProdResources: !Not [!Equals [ !Ref EnvType, prod ]]
+  CreateDevResources: !Equals [ !Ref EnvType, dev ]
+  CreateDrResources: !Equals [ !Ref EnvType, dr ]     
+Resources:
+
+  SZLoadBalancerNonProd:
+    Condition: CreateNonProdResources
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "${EnvName}-SZLoadBalancer"
+      Type: "network"
+      IpAddressType: "ipv4"
+      Scheme: "internal"
+      SubnetMappings:
+        - SubnetId: 
+            Fn::ImportValue: 
+              Fn::Sub: "${NetworkStackName}-${EnvName}-PrivateSubnet1Id"
+          PrivateIPv4Address: !Ref LBPrivateIpAddress1
+      # Subnets: 
+      #   - Fn::ImportValue: 
+      #       Fn::Sub: "${NetworkStackName}-${EnvName}-PrivateSubnet1Id"      
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvName}-SZLoadBalancer"  
+        - Key: env
+          Value: !Sub "${EnvName}"       
+
+  SZLoadBalancerProd:
+    Condition: CreateProdResources
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "${EnvName}-SZLoadBalancer"
+      Type: "network"
+      IpAddressType: "ipv4"
+      Scheme: "internal"
+      SubnetMappings:
+        - SubnetId: 
+            Fn::ImportValue: 
+              Fn::Sub: "${NetworkStackName}-${EnvName}-PrivateSubnet1Id"
+          PrivateIPv4Address: !Ref LBPrivateIpAddress1
+        - SubnetId: 
+            Fn::ImportValue: 
+              Fn::Sub: "${NetworkStackName}-${EnvName}-PrivateSubnet2Id"
+          PrivateIPv4Address: !Ref LBPrivateIpAddress2  
+      # Subnets: 
+      #   - Fn::ImportValue: 
+      #       Fn::Sub: "${NetworkStackName}-${EnvName}-PrivateSubnet1Id"
+      #   - Fn::ImportValue: 
+      #       Fn::Sub: "${NetworkStackName}-${EnvName}-PrivateSubnet2Id"          
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvName}-SZLoadBalancer"  
+        - Key: env
+          Value: !Sub "${EnvName}"  
+  
+  SZ8065TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${EnvName}-SZ-8065"
+      HealthCheckEnabled: true
+      Port: 8065
+      Protocol: TCP
+      TargetGroupAttributes:
+        - Key: "deregistration_delay.timeout_seconds"
+          Value: '20'
+        - Key: "stickiness.enabled"
+          Value: false 
+      Targets:
+        - Id:
+            Fn::ImportValue:
+              Fn::Sub: "${SZStackName}-${EnvName}-APIGw1" 
+        - Id:
+            Fn::ImportValue:
+              Fn::Sub: "${SZStackName}-${EnvName}-APIGw2"  
+          Port: 8065 
+      VpcId:
+        Fn::ImportValue:
+          Fn::Sub: "${NetworkStackName}-${EnvName}-VPCId"
+
+  8065ListenerProd:
+    Condition: CreateProdResources
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+      - Type: forward
+        TargetGroupArn: !Ref SZ8065TargetGroup
+      LoadBalancerArn: !Ref SZLoadBalancerProd
+      Port: 8065
+      Protocol: TCP
+  8065ListenerNonProd:
+    Condition: CreateNonProdResources
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+      - Type: forward
+        TargetGroupArn: !Ref SZ8065TargetGroup
+      LoadBalancerArn: !Ref SZLoadBalancerNonProd
+      Port: 8065
+      Protocol: TCP  
+  
+  SZ8075TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${EnvName}-SZ-8075"
+      HealthCheckEnabled: true
+      Port: 8075
+      Protocol: TCP
+      TargetGroupAttributes:
+        - Key: "deregistration_delay.timeout_seconds"
+          Value: '20'
+        - Key: "stickiness.enabled"
+          Value: true 
+      Targets:
+        - Id:
+            Fn::ImportValue:
+              Fn::Sub: "${SZStackName}-${EnvName}-APIGw1" 
+        - Id:
+            Fn::ImportValue:
+              Fn::Sub: "${SZStackName}-${EnvName}-APIGw2"  
+          Port: 8075
+      VpcId:
+        Fn::ImportValue:
+          Fn::Sub: "${NetworkStackName}-${EnvName}-VPCId"
+          
+  8075ListenerProd:
+    Condition: CreateProdResources
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+      - Type: forward
+        TargetGroupArn: !Ref SZ8075TargetGroup
+      LoadBalancerArn: !Ref SZLoadBalancerProd
+      Port: 8075
+      Protocol: TCP
+  8075ListenerNonProd:
+    Condition: CreateNonProdResources
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+      - Type: forward
+        TargetGroupArn: !Ref SZ8075TargetGroup
+      LoadBalancerArn: !Ref SZLoadBalancerNonProd
+      Port: 8075
+      Protocol: TCP
+         
+  SZ8080TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${EnvName}-SZ-8080"
+      HealthCheckEnabled: true
+      Port: 8080
+      Protocol: TCP
+      TargetGroupAttributes:
+        - Key: "deregistration_delay.timeout_seconds"
+          Value: '20'
+        - Key: "stickiness.enabled"
+          Value: false 
+      Targets:
+        - Id:
+            Fn::ImportValue:
+              Fn::Sub: "${SZStackName}-${EnvName}-APIGw1" 
+        - Id:
+            Fn::ImportValue:
+              Fn::Sub: "${SZStackName}-${EnvName}-APIGw2"  
+          Port: 8080 
+      VpcId:
+        Fn::ImportValue:
+          Fn::Sub: "${NetworkStackName}-${EnvName}-VPCId"
+          
+  8080ListenerProd:
+    Condition: CreateProdResources
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+      - Type: forward
+        TargetGroupArn: !Ref SZ8080TargetGroup
+      LoadBalancerArn: !Ref SZLoadBalancerProd
+      Port: 8080
+      Protocol: TCP
+  8080ListenerNonProd:
+    Condition: CreateNonProdResources
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+      - Type: forward
+        TargetGroupArn: !Ref SZ8080TargetGroup
+      LoadBalancerArn: !Ref SZLoadBalancerNonProd
+      Port: 8080
+      Protocol: TCP
+
+  SZ8090TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${EnvName}-SZ-8090"
+      HealthCheckEnabled: true
+      Port: 8090
+      Protocol: TCP
+      TargetGroupAttributes:
+        - Key: "deregistration_delay.timeout_seconds"
+          Value: '20'
+        - Key: "stickiness.enabled"
+          Value: true 
+      Targets:
+        - Id:
+            Fn::ImportValue:
+              Fn::Sub: "${SZStackName}-${EnvName}-APIGw1" 
+        - Id:
+            Fn::ImportValue:
+              Fn::Sub: "${SZStackName}-${EnvName}-APIGw2"  
+          Port: 8090 
+      VpcId:
+        Fn::ImportValue:
+          Fn::Sub: "${NetworkStackName}-${EnvName}-VPCId"
+          
+  8090ListenerProd:
+    Condition: CreateProdResources
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+      - Type: forward
+        TargetGroupArn: !Ref SZ8090TargetGroup
+      LoadBalancerArn: !Ref SZLoadBalancerProd
+      Port: 8090
+      Protocol: TCP
+  8090ListenerNonProd:
+    Condition: CreateNonProdResources
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+      - Type: forward
+        TargetGroupArn: !Ref SZ8090TargetGroup
+      LoadBalancerArn: !Ref SZLoadBalancerNonProd
+      Port: 8090
+      Protocol: TCP  
+      
+  SZ8089TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${EnvName}-SZ-8089"
+      HealthCheckEnabled: true
+      Port: 8089
+      Protocol: TCP
+      TargetGroupAttributes:
+        - Key: "deregistration_delay.timeout_seconds"
+          Value: '20'
+        - Key: "stickiness.enabled"
+          Value: false 
+      Targets:
+        - Id:
+            Fn::ImportValue:
+              Fn::Sub: "${SZStackName}-${EnvName}-APIGw1" 
+        - Id:
+            Fn::ImportValue:
+              Fn::Sub: "${SZStackName}-${EnvName}-APIGw2"  
+          Port: 8089 
+      VpcId:
+        Fn::ImportValue:
+          Fn::Sub: "${NetworkStackName}-${EnvName}-VPCId"
+          
+  8089ListenerProd:
+    Condition: CreateProdResources
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+      - Type: forward
+        TargetGroupArn: !Ref SZ8089TargetGroup
+      LoadBalancerArn: !Ref SZLoadBalancerProd
+      Port: 8089
+      Protocol: TCP
+  8089ListenerNonProd:
+    Condition: CreateNonProdResources
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+      - Type: forward
+        TargetGroupArn: !Ref SZ8089TargetGroup
+      LoadBalancerArn: !Ref SZLoadBalancerNonProd
+      Port: 8089
+      Protocol: TCP      
+
+###### OUTPUTS SECTION ######   

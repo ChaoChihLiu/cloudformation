@@ -1,0 +1,143 @@
+AWSTemplateFormatVersion: '2010-09-09'
+###### PARAMETERS SECTION ######
+Parameters:
+  NetworkStackName:
+    Description: 'NetworkStackName which EC2 server resides'
+    Type: String
+  DMZStackName:
+    Description: 'DMZworkStackName which creates EC2 servers'
+    Type: String  
+  EnvType:
+    Description: Environment type
+    Default: dev
+    Type: String
+    AllowedValues:
+      - prod
+      - dr
+      - dev
+    ConstraintDescription: must specify prod or dev
+  EnvName:
+    Description: "Environment name"
+    Type: String
+    Default: "dev"
+
+Conditions:
+  CreateProdResources: !Equals [ !Ref EnvType, prod ]
+  CreateNonProdResources: !Not [!Equals [ !Ref EnvType, prod ]]
+  CreateDevResources: !Equals [ !Ref EnvType, dev ]
+  CreateDrResources: !Equals [ !Ref EnvType, dr ]     
+Resources:
+
+  DMZLoadBalancerNonProd:
+    Condition: CreateNonProdResources
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "${EnvName}-DMZLoadBalancer"
+      Type: "network"
+      IpAddressType: "ipv4"
+      Scheme: "internet-facing"
+      Subnets: 
+        - Fn::ImportValue: 
+            Fn::Sub: "${NetworkStackName}-${EnvName}-PublicSubnet1Id"      
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvName}-DMZLoadBalancer"  
+        - Key: env
+          Value: !Sub "${EnvName}" 
+
+  DMZLoadBalancerProd:
+    Condition: CreateProdResources
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "${EnvName}-DMZLoadBalancer"
+      Type: "network"
+      IpAddressType: "ipv4"
+      Scheme: "internet-facing"
+      Subnets: 
+        - Fn::ImportValue: 
+            Fn::Sub: "${NetworkStackName}-${EnvName}-PublicSubnet1Id"
+        - Fn::ImportValue: 
+            Fn::Sub: "${NetworkStackName}-${EnvName}-PublicSubnet2Id"          
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvName}-DMZLoadBalancer"  
+        - Key: env
+          Value: !Sub "${EnvName}"            
+
+  DMZHttpTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${EnvName}-DMZ-80"
+      HealthCheckEnabled: true
+      Port: 80
+      Protocol: TCP
+      TargetGroupAttributes:
+        - Key: "deregistration_delay.timeout_seconds"
+          Value: '20'
+        - Key: "stickiness.enabled"
+          Value: false 
+      Targets:
+        - Id:
+            Fn::ImportValue:
+              Fn::Sub: "${DMZStackName}-${EnvName}-Nginx1" 
+        - Id:
+            Fn::ImportValue:
+              Fn::Sub: "${DMZStackName}-${EnvName}-Nginx2"  
+          Port: 80 
+      VpcId:
+        Fn::ImportValue:
+          Fn::Sub: "${NetworkStackName}-${EnvName}-VPCId"
+
+  HttpListenerProd:
+    Condition: CreateProdResources
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+      - Type: forward
+        TargetGroupArn: !Ref DMZHttpTargetGroup
+      LoadBalancerArn: !Ref DMZLoadBalancerProd
+      Port: 80
+      Protocol: TCP
+  HttpListenerNonProd:
+    Condition: CreateNonProdResources
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+      - Type: forward
+        TargetGroupArn: !Ref DMZHttpTargetGroup
+      LoadBalancerArn: !Ref DMZLoadBalancerNonProd
+      Port: 80
+      Protocol: TCP    
+
+  # DMZSubnetZoneA:
+  #   Type: 'AWS::EC2::Subnet'
+  #   Properties:
+  #       AvailabilityZone:
+  #         Fn::ImportValue: 
+  #           Fn::Sub: "${NetworkStackName}-${EnvName}-Subnet1AZ"  
+  #       CidrBlock:
+  #         Fn::ImportValue: 
+  #           Fn::Sub: "${NetworkStackName}-${EnvName}-MainVPCCidrBlock"  
+  #       MapPublicIpOnLaunch: 'True'
+  #       VpcId:
+  #         Fn::ImportValue:
+  #           Fn::Sub: "${NetworkStackName}-${EnvName}-VPCId"
+  #       Tags:
+  #           - Key: 'Name'
+  #             Value: !Sub "${EnvName}-DMZSubnetZoneA"      
+
+  # ELBSecurityGroup:
+  #   Type: AWS::EC2::SecurityGroup
+  #   Properties:
+  #       GroupDescription: 'Port 80'
+  #       VpcId:
+  #         Fn::ImportValue:
+  #           Fn::Sub: "${DMZworkStackName}-${EnvName}-VPCId"
+  #       SecurityGroupIngress:
+  #           - IpProtocol: tcp
+  #             FromPort: 80
+  #             ToPort: 80
+  #             CidrIp: !Ref HttpTrafficAllowedIP   
+
+
+###### OUTPUTS SECTION ######      

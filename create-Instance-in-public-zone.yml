@@ -1,0 +1,432 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+###### PARAMETERS SECTION ######
+
+Parameters:
+  NetworkStackName:
+    Description: 'NetworkStackName which EC2 server resides'
+    Type: String
+  EnvType:
+    Description: Environment type
+    Default: dev
+    Type: String
+    AllowedValues:
+      - prod
+      - dr
+      - dev
+    ConstraintDescription: must specify prod or dev
+  EnvName:
+    Description: "Environment name"
+    Type: String
+    Default: "dev"
+  
+  NginxInstanceType:
+    Description: 'Nginx EC2 instance type'
+    Type: String
+    Default: t2.micro
+    AllowedValues:  [t1.micro, t2.nano, t2.micro, t2-small, t3.micro]
+    ConstraintDescription: 'Must be a valid EC2 instance type'
+  NginxAMI:
+    Description: 'Id of an existing AMI image for launching EC2 instance'
+    Type: AWS::EC2::Image::Id
+    Default: 'ami-05a4cce8936a89f06'
+    ConstraintDescription: 'Must be ID of an existing EC2 image'
+  NginxSSHKey:
+    Description: 'Name of an existing EC2 KeyPair to enable SSH access to the instance'
+    Type: AWS::EC2::KeyPair::KeyName
+    Default: 'nginx-key'
+    ConstraintDescription: 'Must be the name of an existing EC2 KeyPair'
+  NginxRootStorage:
+    Description: Size Root for (GiB)
+    Type: String
+    MinLength: 1
+    MaxLength: 255
+    Default: 8   
+  
+  OpenSwanInstanceType:
+    Description: 'OpenSwan EC2 instance type'
+    Type: String
+    Default: t2.micro
+    AllowedValues:  [t1.micro, t2.nano, t2.micro, t2-small, t3.micro]
+    ConstraintDescription: 'Must be a valid EC2 instance type'
+  OpenSwanAMI:
+    Description: 'Id of an existing AMI image for launching EC2 instance'
+    Type: AWS::EC2::Image::Id
+    Default: 'ami-05a4cce8936a89f06'
+    ConstraintDescription: 'Must be ID of an existing EC2 image'
+  OpenSwanSSHKey:
+    Description: 'Name of an existing EC2 KeyPair to enable SSH access to the instance'
+    Type: AWS::EC2::KeyPair::KeyName
+    Default: 'openswan-key'
+    ConstraintDescription: 'Must be the name of an existing EC2 KeyPair'
+  OpenSwanRootStorage:
+    Description: Size Root for (GiB)
+    Type: String
+    MinLength: 1
+    MaxLength: 255
+    Default: 8     
+    
+  APIPortalNeeded:
+    Description: 'is API Portal needed?'
+    Type: String
+    Default: 'false'
+  APIPortalInstanceType:
+    Description: 'API Portal EC2 instance type'
+    Type: String
+    Default: m5.large
+    ConstraintDescription: 'Must be a valid EC2 instance type'
+  APIPortalAMI:
+    Description: 'Id of an existing AMI image for launching EC2 instance'
+    Type: AWS::EC2::Image::Id
+    Default: 'ami-00014daafdc4239f4'
+    ConstraintDescription: 'Must be ID of an existing EC2 image'
+  APIPortalSSHKey:
+    Description: 'Name of an existing EC2 KeyPair to enable SSH access to the instance'
+    Type: AWS::EC2::KeyPair::KeyName
+    Default: 'dmz-key'
+    ConstraintDescription: 'Must be the name of an existing EC2 KeyPair'
+  APIPortalRootStorage:
+    Description: Size Root for (GiB)
+    Type: String
+    MinLength: 1
+    MaxLength: 255
+    Default: 100
+Conditions:
+  CreateProdResources: !Equals [ !Ref EnvType, prod ]
+  CreateNonProdResources: !Not [!Equals [ !Ref EnvType, prod ]]
+  CreateDevResources: !Equals [ !Ref EnvType, dev ]
+  CreateDrResources: !Equals [ !Ref EnvType, dr ]    
+  BuildAPIPortal: !Equals [ !Ref APIPortalNeeded, "true" ]    
+
+###### RESOURCES SECTION ######
+
+Resources:
+  ####### LAUNCH TEMPLATE
+  NginxLaunchTemplate:
+    Type: "AWS::EC2::LaunchTemplate"
+    Properties:
+      LaunchTemplateName: !Sub "${EnvName}-NginxLaunchTemplate"
+      LaunchTemplateData:
+      #   UserData: !Base64 |
+      #     #!/bin/bash -x
+      #     yum install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm
+      #     yum-config-manager --enable epel
+      #     yum install telnet -y
+      #     yum install iftop -y
+      #     yum install nginx -y
+      #     yum install tcpdump -y
+      #     yum install traceroute -y
+      #     yum install mtr -y
+      #     yum --enablerepo=epel install hping3 -y
+        KeyName: !Ref NginxSSHKey
+        ImageId: !Ref NginxAMI
+        BlockDeviceMappings:
+          -
+            DeviceName: "/dev/xvda"
+            Ebs:
+              VolumeSize: !Ref NginxRootStorage
+              VolumeType: gp2
+        InstanceType: !Ref NginxInstanceType
+        SecurityGroupIds:
+          - !GetAtt NginxSG.GroupId
+      
+  NginxSG:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: 'Limits external access to Nginx'
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: '0.0.0.0/0'
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: '0.0.0.0/0'
+      # VpcId: !Ref VpcId
+      VpcId: 
+        Fn::ImportValue:
+          Fn::Sub: "${NetworkStackName}-${EnvName}-VPCId"
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvName}-NginxSecurityGroup"
+  Nginx1:
+    Type: 'AWS::EC2::Instance'
+    Properties:
+      AvailabilityZone: 
+        Fn::ImportValue:
+          Fn::Sub: "${NetworkStackName}-${EnvName}-Subnet1AZ"
+      SubnetId: 
+        Fn::ImportValue:
+          Fn::Sub: "${NetworkStackName}-${EnvName}-PublicSubnet1Id"    
+      LaunchTemplate:
+        LaunchTemplateId: !Ref NginxLaunchTemplate
+        Version: !GetAtt NginxLaunchTemplate.LatestVersionNumber
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvName}-Nginx1"  
+        - Key: env
+          Value: !Sub "${EnvName}"
+  Nginx2NonProd:
+    Condition: CreateNonProdResources
+    Type: 'AWS::EC2::Instance'
+    Properties:
+      AvailabilityZone: 
+        Fn::ImportValue:
+          Fn::Sub: "${NetworkStackName}-${EnvName}-Subnet1AZ"
+      SubnetId: 
+        Fn::ImportValue:
+          Fn::Sub: "${NetworkStackName}-${EnvName}-PublicSubnet1Id"    
+      LaunchTemplate:
+        LaunchTemplateId: !Ref NginxLaunchTemplate
+        Version: !GetAtt NginxLaunchTemplate.LatestVersionNumber
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvName}-Nginx2"  
+        - Key: env
+          Value: !Sub "${EnvName}"
+  Nginx2Prod:
+    Condition: CreateProdResources
+    Type: 'AWS::EC2::Instance'
+    Properties:
+      AvailabilityZone: 
+        Fn::ImportValue:
+          Fn::Sub: "${NetworkStackName}-${EnvName}-Subnet2AZ"
+      SubnetId: 
+        Fn::ImportValue:
+          Fn::Sub: "${NetworkStackName}-${EnvName}-PublicSubnet2Id"    
+      LaunchTemplate:
+        LaunchTemplateId: !Ref NginxLaunchTemplate
+        Version: !GetAtt NginxLaunchTemplate.LatestVersionNumber
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvName}-Nginx2"  
+        - Key: env
+          Value: !Sub "${EnvName}"   
+          
+ #openswan
+  OpenSwanLaunchTemplate:
+    Type: "AWS::EC2::LaunchTemplate"
+    Properties:
+      LaunchTemplateName: !Sub "${EnvName}-OpenSwanLaunchTemplate"
+      LaunchTemplateData:
+      #   UserData: !Base64 |
+      #     #!/bin/bash -x
+      #     yum install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm
+      #     yum-config-manager --enable epel
+      #     yum install telnet -y
+      #     yum install iftop -y
+      #     yum install nginx -y
+      #     yum install tcpdump -y
+      #     yum install traceroute -y
+      #     yum install openswan -y
+      #     yum install lsof -y
+      #     yum --enablerepo=epel install hping3 -y
+        KeyName: !Ref OpenSwanSSHKey
+        ImageId: !Ref OpenSwanAMI
+        BlockDeviceMappings:
+          -
+            DeviceName: "/dev/xvda"
+            Ebs:
+              VolumeSize: !Ref OpenSwanRootStorage
+              VolumeType: gp2
+        InstanceType: !Ref OpenSwanInstanceType
+        SecurityGroupIds:
+          - !GetAtt OpenSwanSG.GroupId
+      
+  OpenSwanSG:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: 'Limits external access to OpenSwan'
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: '0.0.0.0/0'
+        - IpProtocol: ICMP
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 
+            Fn::ImportValue:
+              Fn::Sub: "${NetworkStackName}-${EnvName}-MainVPCCidrBlock"  
+        - IpProtocol: tcp
+          FromPort: 0
+          ToPort: 65535
+          CidrIp:
+            Fn::ImportValue:
+              Fn::Sub: "${NetworkStackName}-${EnvName}-MainVPCCidrBlock"    
+        # - IpProtocol: AH (51)
+        #   FromPort: -1
+        #   ToPort: -1
+        #   CidrIp: '0.0.0.0/0'
+        # - IpProtocol: ESP (50)
+        #   FromPort: -1
+        #   ToPort: -1
+        #   CidrIp: '0.0.0.0/0'
+        - IpProtocol: UDP
+          FromPort: 4500
+          ToPort: 4500
+          CidrIp: '0.0.0.0/0'
+        - IpProtocol: UDP
+          FromPort: 500
+          ToPort: 500
+          CidrIp: '0.0.0.0/0'          
+      # VpcId: !Ref VpcId
+      VpcId: 
+        Fn::ImportValue:
+          Fn::Sub: "${NetworkStackName}-${EnvName}-VPCId"
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvName}-OpenSwanSecurityGroup"
+  OpenSwan:
+    Type: 'AWS::EC2::Instance'
+    Properties:
+      AvailabilityZone: 
+        Fn::ImportValue:
+          Fn::Sub: "${NetworkStackName}-${EnvName}-Subnet1AZ"
+      SubnetId: 
+        Fn::ImportValue:
+          Fn::Sub: "${NetworkStackName}-${EnvName}-PublicSubnet1Id"    
+      LaunchTemplate:
+        LaunchTemplateId: !Ref OpenSwanLaunchTemplate
+        Version: !GetAtt OpenSwanLaunchTemplate.LatestVersionNumber
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvName}-OpenSwan"  
+        - Key: env
+          Value: !Sub "${EnvName}"  
+
+  OpenSwanPublicIP:
+    Type: 'AWS::EC2::EIP'
+    Properties: {}
+  OpenSwanEIPAssociation:
+    Type: 'AWS::EC2::EIPAssociation'
+    Properties:
+      InstanceId: !Ref OpenSwan
+      EIP: !Ref OpenSwanPublicIP
+ #openswan
+          
+          
+  APIPortalLaunchTemplate:
+    Condition: BuildAPIPortal
+    Type: "AWS::EC2::LaunchTemplate"
+    Properties:
+      LaunchTemplateName: !Sub "${EnvName}-APIPortalLaunchTemplate"
+      LaunchTemplateData:
+      #   UserData: !Base64 |
+      #     #!/bin/bash -x
+      #     yum install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm
+      #     yum-config-manager --enable epel
+      #     yum install telnet -y
+      #     yum install java -y
+      #     yum install epel-release -y
+      #     yum install http://rpms.remirepo.net/enterprise/remi-release-7.rpm -y 
+      #     yum install yum-utils -y
+      #     yum update
+      #     yum-config-manager --enable remi-php72 -y
+      #     yum install php72 -y
+      #     yum install php72 php72-php-fpm php72-php-gd php72-php-json php72-php-mbstring php72-php-mysqlnd php72-php-xml php72-php-xmlrpc php72-php-opcache -y
+      #     yum install php-cli
+      #     yum install iftop -yum
+      #     yum install tcpdump -y
+        KeyName: !Ref APIPortalSSHKey
+        ImageId: !Ref APIPortalAMI
+        BlockDeviceMappings:
+          -
+            DeviceName: "/dev/sda1"
+            Ebs:
+              VolumeSize: !Ref APIPortalRootStorage
+              VolumeType: gp2
+        InstanceType: !Ref APIPortalInstanceType
+        SecurityGroupIds:
+          - !GetAtt APIPortalSG.GroupId
+      
+  APIPortalSG:
+    Condition: BuildAPIPortal
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: 'Limits external access to API Portal'
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 
+            Fn::ImportValue:
+              Fn::Sub: "${NetworkStackName}-${EnvName}-MainVPCCidrBlock"
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: '0.0.0.0/0'
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          CidrIp: '0.0.0.0/0' 
+      # VpcId: !Ref VpcId
+      VpcId: 
+        Fn::ImportValue:
+          Fn::Sub: "${NetworkStackName}-${EnvName}-VPCId"
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvName}-NginxSecurityGroup"
+
+  APIPortalPublicIP:
+    Condition: BuildAPIPortal
+    Type: 'AWS::EC2::EIP'
+    Properties: {}
+  APIPortalEIPAssociation:
+    Condition: BuildAPIPortal
+    Type: 'AWS::EC2::EIPAssociation'
+    Properties:
+      InstanceId: !Ref APIPortal
+      EIP: !Ref APIPortalPublicIP   
+
+  APIPortal:
+    Condition: BuildAPIPortal
+    Type: 'AWS::EC2::Instance'
+    Properties:
+      AvailabilityZone: 
+        Fn::ImportValue:
+          Fn::Sub: "${NetworkStackName}-${EnvName}-Subnet1AZ"
+      SubnetId: 
+        Fn::ImportValue:
+          Fn::Sub: "${NetworkStackName}-${EnvName}-PublicSubnet1Id"    
+      LaunchTemplate:
+        LaunchTemplateId: !Ref APIPortalLaunchTemplate
+        Version: !GetAtt APIPortalLaunchTemplate.LatestVersionNumber
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvName}-APIPortal"  
+        - Key: env
+          Value: !Sub "${EnvName}"        
+
+###### OUTPUTS SECTION ######
+
+Outputs:
+  NginxSecurityGroup:
+    Description: The ID of the Nginx security group
+    Value: !GetAtt NginxSG.GroupId
+    Export:
+      Name: !Sub "${AWS::StackName}-${EnvName}-NginxSecurityGroup"
+  APIPortalGroup:
+    Condition: BuildAPIPortal
+    Description: The ID of the APIPortal security group
+    Value: !GetAtt APIPortalSG.GroupId
+    Export:
+      Name: !Sub "${EnvName}-APIPortalGroup"  
+  Nginx1:
+    Description: The ID of Nginx1 EC2 Instance
+    Value: !Ref Nginx1
+    Export:
+      Name: !Sub "${AWS::StackName}-${EnvName}-Nginx1"
+  Nginx2Prod:
+    Condition: CreateProdResources
+    Description: The ID of Nginx2 EC2 Instance
+    Value: !Ref Nginx2Prod
+    Export:
+      Name: !Sub "${AWS::StackName}-${EnvName}-Nginx2"       
+  Nginx2NonProd:
+    Condition: CreateNonProdResources
+    Description: The ID of Nginx2 EC2 Instance
+    Value: !Ref Nginx2NonProd
+    Export:
+      Name: !Sub "${AWS::StackName}-${EnvName}-Nginx2"          

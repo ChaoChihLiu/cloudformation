@@ -1,0 +1,289 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+###### PARAMETERS SECTION ######
+
+Parameters: 
+  Subnet1AZ:
+    Type: AWS::EC2::AvailabilityZone::Name
+    Default: 'ap-southeast-1a' 
+  Subnet2AZ:
+    Type: AWS::EC2::AvailabilityZone::Name
+    Default: 'ap-southeast-1b'
+    Description: 'Only apply to Prod Environment'  
+  MainVPCCidrBlock:
+    Type: String
+    Default: '10.11.0.0/16' 
+  PrivateSubnet1CidrBlock:
+    Type: String
+    Default: '10.11.0.0/24'  
+  PublicSubnet1CidrBlock:
+    Type: String
+    Default: '10.11.1.0/24'
+  PrivateSubnet2CidrBlock:
+    Type: String
+    Default: '10.11.10.0/24' 
+    Description: 'Only apply to Prod Environment'   
+  PublicSubnet2CidrBlock:
+    Type: String
+    Default: '10.11.11.0/24'    
+    Description: 'Only apply to Prod Environment'   
+  EnvType:
+    Description: Environment type
+    Default: dev
+    Type: String
+    AllowedValues:
+      - prod
+      - dr
+      - dev
+    ConstraintDescription: must specify prod or dev
+  EnvName:
+    Description: "Environment name"
+    Type: String
+    Default: "dev"
+Conditions:
+  CreateProdResources: !Equals [ !Ref EnvType, prod ]
+  CreateDevResources: !Equals [ !Ref EnvType, dev ]
+  CreateDrResources: !Equals [ !Ref EnvType, dr ]
+
+###### RESOURCES SECTION ######
+
+Resources:
+  MainVPC:
+    Type: 'AWS::EC2::VPC'
+    Properties:
+      CidrBlock: !Ref MainVPCCidrBlock
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvName}-MainVPC"
+
+  PublicSubnet1:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      AvailabilityZone:
+        !Ref Subnet1AZ
+      VpcId: !Ref MainVPC
+      CidrBlock: !Ref PublicSubnet1CidrBlock
+      Tags:
+        - Key: Network
+          Value: Public
+        - Key: Name
+          Value: !Sub "${EnvName}-public-subnet1"
+    DependsOn:
+      - MainVPC
+
+  VPCRouteTable:
+    Type: 'AWS::EC2::RouteTable'
+    DependsOn:
+      - MainVPC
+      - IGW
+      - VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref MainVPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvName}-RT-to-igw"
+
+  EgressPublicSubnetRoute:
+    Type: 'AWS::EC2::Route'
+    Properties:
+      RouteTableId: !Ref VPCRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref IGW
+    DependsOn:
+      - IGW
+      - VPCRouteTable
+  PublicSubnet1RouteTableAssociation:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      RouteTableId: !Ref VPCRouteTable
+      SubnetId: !Ref PublicSubnet1
+    DependsOn:
+      - PublicSubnet1
+      - VPCRouteTable
+
+  PublicSubnet2:
+    Condition: CreateProdResources
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      AvailabilityZone:
+        !Ref Subnet2AZ
+      VpcId: !Ref MainVPC
+      CidrBlock: !Ref PublicSubnet2CidrBlock
+      Tags:
+        - Key: Network
+          Value: Public
+        - Key: Name
+          Value: !Sub "${EnvName}-public-subnet2"
+    DependsOn:
+      - MainVPC
+    
+  PublicSubnet2RouteTableAssociation:
+    Condition: CreateProdResources
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      RouteTableId: !Ref VPCRouteTable
+      SubnetId: !Ref PublicSubnet2
+    DependsOn:
+      - PublicSubnet2
+      - VPCRouteTable    
+
+  PrivateSubnet1:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      AvailabilityZone:
+        !Ref Subnet1AZ
+      VpcId: !Ref MainVPC
+      CidrBlock: !Ref PrivateSubnet1CidrBlock
+      Tags:
+        - Key: Network
+          Value: Private
+        - Key: Name
+          Value: !Sub "${EnvName}-private-subnet1"
+  RouteTableToNAT1:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref MainVPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvName}-RT-to-nat1"
+
+  # EgressNAT1Route:
+  #   Type: 'AWS::EC2::Route'
+  #   Properties:
+  #     RouteTableId: !Ref RouteTableToNAT1
+  #     DestinationCidrBlock: 0.0.0.0/0
+  #     NatGatewayId: !Ref NATGW
+  PrivateSubnet1NATRouteTableAssociation:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      RouteTableId: !Ref RouteTableToNAT1
+      SubnetId: !Ref PrivateSubnet1
+
+  PrivateSubnet2:
+    Condition: CreateProdResources
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      AvailabilityZone:
+        !Ref Subnet2AZ
+      VpcId: !Ref MainVPC
+      CidrBlock: !Ref PrivateSubnet2CidrBlock
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvName}-private-subnet2"
+  PrivateSubnet2NATRouteTableAssociation:
+    Condition: CreateProdResources
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      RouteTableId: !Ref RouteTableToNAT1
+      SubnetId: !Ref PrivateSubnet2
+
+  IGW:
+    Type: 'AWS::EC2::InternetGateway'
+    Properties:
+      Tags:
+        - Key: Network
+          Value: Public
+        - Key: Name
+          Value: !Sub "${EnvName}-gateway"  
+    DependsOn:
+      - MainVPC
+  VPCGatewayAttachment:
+    Type: 'AWS::EC2::VPCGatewayAttachment'
+    Properties:
+      InternetGatewayId: !Ref IGW
+      VpcId: !Ref MainVPC
+    DependsOn:
+      - MainVPC
+      - IGW
+
+  # NATGW:
+  #   Type: 'AWS::EC2::NatGateway'
+  #   Properties:
+  #     SubnetId: !Ref PublicSubnet1
+  #     AllocationId: !GetAtt
+  #       - NATGWPublicIP
+  #       - AllocationId
+  #     Tags:
+  #       - Key: Name
+  #         Value: !Sub "${EnvName}-NATGW"
+  #   DependsOn:
+  #     - MainVPC  
+  # NATGWPublicIP:
+  #   Type: 'AWS::EC2::EIP'
+  #   Properties: {}
+  #   DependsOn:
+  #     - MainVPC   
+
+###### OUTPUTS SECTION ######
+
+Outputs:
+  VPCId:
+    Description: The ID of the VPC
+    Value: !Ref MainVPC
+    Export:
+      Name: !Sub "${AWS::StackName}-${EnvName}-VPCId"
+  # NATPublicIP:
+  #   Description: Public IP of NAT gateway
+  #   Value: !Ref NATGWPublicIP
+  #   Export:
+  #     Name: !Sub "${EnvName}-NATGWPublicIP"    
+  PublicSubnet1Id:
+    Description: The ID of the PublicSubnet1
+    Value: !Ref PublicSubnet1
+    Export:
+      Name: !Sub "${AWS::StackName}-${EnvName}-PublicSubnet1Id"
+  PublicSubnet2Id:
+    Condition: CreateProdResources
+    Description: The ID of the PublicSubnet2
+    Value: !Ref PublicSubnet2
+    Export:
+      Name: !Sub "${AWS::StackName}-${EnvName}-PublicSubnet2Id"
+  Subnet1AZ:
+    Description: The name of the 1st AZ
+    Value: !Ref Subnet1AZ
+    Export:
+      Name: !Sub "${AWS::StackName}-${EnvName}-Subnet1AZ"
+  Subnet2AZ:
+    Condition: CreateProdResources
+    Description: The name of the 2nd AZ
+    Value: !Ref Subnet2AZ
+    Export:
+      Name: !Sub "${AWS::StackName}-${EnvName}-Subnet2AZ"
+  PrivateSubnet1Id:
+    Description: The ID of the PrivateSubnet1
+    Value: !Ref PrivateSubnet1
+    Export:
+      Name: !Sub "${AWS::StackName}-${EnvName}-PrivateSubnet1Id" 
+  PrivateSubnet2Id:
+    Condition: CreateProdResources
+    Description: The ID of the PrivateSubnet2
+    Value: !Ref PrivateSubnet2
+    Export:
+      Name: !Sub "${AWS::StackName}-${EnvName}-PrivateSubnet2Id"
+  RouteTableId:
+    Description: The ID of the RouteTable
+    Value: !Ref VPCRouteTable
+    Export:
+      Name: !Sub "${AWS::StackName}-${EnvName}-VPCRouteTableId"   
+  MainVPCCidrBlock:
+    Description: The Value of CIDR Block
+    Value: !Ref MainVPCCidrBlock
+    Export:
+      Name: !Sub "${AWS::StackName}-${EnvName}-MainVPCCidrBlock" 
+  DefaultSGId:
+    Description: The ID of the default security group
+    Value: !GetAtt MainVPC.DefaultSecurityGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-${EnvName}-DefaultSGId"
+
+  PrivateSubnet1CidrBlock:    
+    Description: private subnet1 CIDR Block
+    Value: !Ref PrivateSubnet1CidrBlock
+    Export:
+      Name: !Sub "${AWS::StackName}-${EnvName}-PrivateSubnet1CidrBlock"
+  PrivateSubnet2CidrBlock:    
+    Condition: CreateProdResources
+    Description: private subnet2 CIDR Block
+    Value: !Ref PrivateSubnet2CidrBlock
+    Export:
+      Name: !Sub "${AWS::StackName}-${EnvName}-PrivateSubnet2CidrBlock"  

@@ -1,0 +1,613 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+###### PARAMETERS SECTION ######
+
+Parameters:
+  NetworkStackName:
+    Description: 'NetworkStackName which EC2 server resides'
+    Type: String
+  EnvType:
+    Description: Environment type
+    Default: dev
+    Type: String
+    AllowedValues:
+      - prod
+      - dr
+      - dev
+    ConstraintDescription: must specify prod or dev
+  EnvName:
+    Description: "Environment name"
+    Type: String
+    Default: "dev"
+  
+  CassandraInstanceType:
+    Description: 'Cassandra EC2 instance type'
+    Type: String
+    Default: m5.large
+    ConstraintDescription: 'Must be a valid EC2 instance type'
+  CassandraAMI:
+    Description: 'Id of an existing AMI image for launching EC2 instance'
+    Type: AWS::EC2::Image::Id
+    Default: 'ami-00014daafdc4239f4'
+    ConstraintDescription: 'Must be ID of an existing EC2 image'
+  CassandraSSHKey:
+    Description: 'Name of an existing EC2 KeyPair to enable SSH access to the instance'
+    Type: AWS::EC2::KeyPair::KeyName
+    Default: 'sz-key'
+    ConstraintDescription: 'Must be the name of an existing EC2 KeyPair'
+  CassandraTrafficAllowedIP:
+    AllowedPattern: '((\d{1,3})\.){3}\d{1,3}/\d{1,2}'
+    Default: '0.0.0.0/0'
+    Description: 'Valid CIDR block of source should be allowed'
+    Type: String
+    ConstraintDescription: 'Must be a valid CIDR block'
+  CassandraRootStorage:
+    Description: Size Root for (GiB)
+    Type: String
+    MinLength: 1
+    MaxLength: 255
+    Default: 50
+  3rdCassandraNeeded:
+    Description: is 3rd Cassandra server needed
+    Type: String
+    Default: 'false' 
+  4thCassandraNeeded:
+    Description: is 4th Cassandra server needed
+    Type: String
+    Default: 'false'
+  5thCassandraNeeded:
+    Description: is 5th Cassandra server needed
+    Type: String
+    Default: 'false' 
+  6thCassandraNeeded:
+    Description: is 6th Cassandra server needed
+    Type: String
+    Default: 'false'        
+    
+
+  APIGwInstanceType:
+    Description: 'API Gateway EC2 instance type'
+    Type: String
+    Default: m5.large
+    ConstraintDescription: 'Must be a valid EC2 instance type'
+  APIGwAMI:
+    Description: 'Id of an existing AMI image for launching EC2 instance'
+    Type: AWS::EC2::Image::Id
+    Default: 'ami-00014daafdc4239f4'
+    ConstraintDescription: 'Must be ID of an existing EC2 image'
+  APIGwSSHKey:
+    Description: 'Name of an existing EC2 KeyPair to enable SSH access to the instance'
+    Type: AWS::EC2::KeyPair::KeyName
+    Default: 'sz-key'
+    ConstraintDescription: 'Must be the name of an existing EC2 KeyPair'
+  APIGwTrafficAllowedIP:
+    AllowedPattern: '((\d{1,3})\.){3}\d{1,3}/\d{1,2}'
+    Default: '0.0.0.0/0'
+    Description: 'Valid CIDR block of source should be allowed'
+    Type: String
+    ConstraintDescription: 'Must be a valid CIDR block'
+  APIGwRootStorage:
+    Description: Size Root for (GiB)
+    Type: String
+    MinLength: 1
+    MaxLength: 255
+    Default: 50
+  
+    
+  EAInstanceType:
+    Description: 'Embedded Analytics EC2 instance type'
+    Type: String
+    Default: r5.large
+    ConstraintDescription: 'Must be a valid EC2 instance type'
+  EAAMI:
+    Description: 'Id of an existing AMI image for launching EC2 instance'
+    Type: AWS::EC2::Image::Id
+    Default: 'ami-00014daafdc4239f4'
+    ConstraintDescription: 'Must be ID of an existing EC2 image'
+  EASSHKey:
+    Description: 'Name of an existing EC2 KeyPair to enable SSH access to the instance'
+    Type: AWS::EC2::KeyPair::KeyName
+    Default: 'sz-key'
+    ConstraintDescription: 'Must be the name of an existing EC2 KeyPair'
+  EATrafficAllowedIP:
+    AllowedPattern: '((\d{1,3})\.){3}\d{1,3}/\d{1,2}'
+    Default: '0.0.0.0/0'
+    Description: 'Valid CIDR block of source should be allowed'
+    Type: String
+    ConstraintDescription: 'Must be a valid CIDR block'
+  EARootStorage:
+    Description: Size Root for (GiB)
+    Type: String
+    MinLength: 1
+    MaxLength: 255
+    Default: 100  
+Conditions:
+  CreateProdResources: !Equals [ !Ref EnvType, prod ]
+  CreateNonProdResources: !Not [!Equals [ !Ref EnvType, prod ]]
+  CreateDevResources: !Equals [ !Ref EnvType, dev ]
+  CreateDrResources: !Equals [ !Ref EnvType, dr ] 
+  Build3rdCassandra: !Equals [ !Ref 3rdCassandraNeeded, 'true' ] 
+  Build4thCassandra: !Equals [ !Ref 4thCassandraNeeded, 'true' ] 
+  Build5thCassandra: !Equals [ !Ref 5thCassandraNeeded, 'true' ] 
+  Build6thCassandra: !Equals [ !Ref 6thCassandraNeeded, 'true' ]   
+  
+  Build4thCassandraInProd: !And 
+    - !Condition CreateProdResources
+    - !Condition Build4thCassandra
+  Build4thCassandraInNonProd: !And 
+    - !Condition CreateNonProdResources
+    - !Condition Build4thCassandra
+  Build6thCassandraInProd: !And 
+    - !Condition CreateProdResources
+    - !Condition Build6thCassandra
+  Build6thCassandraInNonProd: !And 
+    - !Condition CreateNonProdResources
+    - !Condition Build6thCassandra     
+
+
+###### RESOURCES SECTION ######
+
+Resources:
+  ####### LAUNCH TEMPLATE
+  CassandraLaunchTemplate:
+    Type: "AWS::EC2::LaunchTemplate"
+    Properties:
+      LaunchTemplateName: !Sub "${EnvName}-CassandraLaunchTemplate"
+      LaunchTemplateData:
+      #   UserData: !Base64 |
+      #     #!/bin/bash -x
+      #     yum install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm
+      #     yum-config-manager --enable epel
+      #     yum install telnet -y
+      #     yum install iftop -y
+      #     yum install tcpdump -y
+      #     yum install java -y
+        KeyName: !Ref CassandraSSHKey
+        ImageId: !Ref CassandraAMI
+        BlockDeviceMappings:
+          -
+            DeviceName: "/dev/sda1"
+            Ebs:
+              VolumeSize: !Ref CassandraRootStorage
+              VolumeType: gp2
+        InstanceType: !Ref CassandraInstanceType
+        SecurityGroupIds:
+          - !GetAtt CassandraSG.GroupId
+      
+  CassandraSG:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: 'Limits external access to Cassandra'
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 
+            Fn::ImportValue:
+              Fn::Sub: "${NetworkStackName}-${EnvName}-MainVPCCidrBlock"
+        - IpProtocol: ICMP
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 
+            Fn::ImportValue:
+              Fn::Sub: "${NetworkStackName}-${EnvName}-MainVPCCidrBlock"      
+        - IpProtocol: tcp
+          FromPort: 7001
+          ToPort: 7001
+          CidrIp: !Ref CassandraTrafficAllowedIP  
+        - IpProtocol: tcp
+          FromPort: 9042
+          ToPort: 9042
+          CidrIp: !Ref CassandraTrafficAllowedIP    
+      # VpcId: !Ref VpcId
+      VpcId: 
+        Fn::ImportValue:
+          Fn::Sub: "${NetworkStackName}-${EnvName}-VPCId"
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvName}-CassandraSecurityGroup"
+  Cassandra1:
+    Type: 'AWS::EC2::Instance'
+    Properties:
+      AvailabilityZone: 
+        Fn::ImportValue:
+          Fn::Sub: "${NetworkStackName}-${EnvName}-Subnet1AZ"
+      SubnetId: 
+        Fn::ImportValue:
+          Fn::Sub: "${NetworkStackName}-${EnvName}-PrivateSubnet1Id"    
+      LaunchTemplate:
+        LaunchTemplateId: !Ref CassandraLaunchTemplate
+        Version: !GetAtt CassandraLaunchTemplate.LatestVersionNumber
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvName}-Cassandra1"  
+        - Key: env
+          Value: !Sub "${EnvName}"
+
+  Cassandra2a:
+    Condition: CreateNonProdResources
+    Type: 'AWS::EC2::Instance'
+    Properties:
+      AvailabilityZone: 
+        Fn::ImportValue: 
+          Fn::Sub: "${NetworkStackName}-${EnvName}-Subnet1AZ"  
+      SubnetId: 
+        Fn::ImportValue:
+          Fn::Sub: "${NetworkStackName}-${EnvName}-PrivateSubnet1Id"    
+      LaunchTemplate:
+        LaunchTemplateId: !Ref CassandraLaunchTemplate
+        Version: !GetAtt CassandraLaunchTemplate.LatestVersionNumber
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvName}-Cassandra2"  
+        - Key: env
+          Value: !Sub "${EnvName}" 
+  Cassandra2b:
+    Condition: CreateProdResources
+    Type: 'AWS::EC2::Instance'
+    Properties:
+      AvailabilityZone: 
+        Fn::ImportValue: 
+          Fn::Sub: "${NetworkStackName}-${EnvName}-Subnet2AZ"  
+      SubnetId: 
+        Fn::ImportValue:
+          Fn::Sub: "${NetworkStackName}-${EnvName}-PrivateSubnet2Id"    
+      LaunchTemplate:
+        LaunchTemplateId: !Ref CassandraLaunchTemplate
+        Version: !GetAtt CassandraLaunchTemplate.LatestVersionNumber
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvName}-Cassandra2"  
+        - Key: env
+          Value: !Sub "${EnvName}"    
+               
+  Cassandra3:
+    Condition: Build3rdCassandra
+    Type: 'AWS::EC2::Instance'
+    Properties:
+      AvailabilityZone: 
+        Fn::ImportValue:
+          Fn::Sub: "${NetworkStackName}-${EnvName}-Subnet1AZ"
+      SubnetId: 
+        Fn::ImportValue:
+          Fn::Sub: "${NetworkStackName}-${EnvName}-PrivateSubnet1Id"    
+      LaunchTemplate:
+        LaunchTemplateId: !Ref CassandraLaunchTemplate
+        Version: !GetAtt CassandraLaunchTemplate.LatestVersionNumber
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvName}-Cassandra3"  
+        - Key: env
+          Value: !Sub "${EnvName}" 
+
+  Cassandra4a:
+    Condition: Build4thCassandraInNonProd
+    Type: 'AWS::EC2::Instance'
+    Properties:
+      AvailabilityZone: 
+        Fn::ImportValue:
+          Fn::Sub: "${NetworkStackName}-${EnvName}-Subnet1AZ"  
+      SubnetId: 
+        Fn::ImportValue:
+          Fn::Sub: "${NetworkStackName}-${EnvName}-PrivateSubnet1Id"   
+      LaunchTemplate:
+        LaunchTemplateId: !Ref CassandraLaunchTemplate
+        Version: !GetAtt CassandraLaunchTemplate.LatestVersionNumber
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvName}-Cassandra4"  
+        - Key: env
+          Value: !Sub "${EnvName}"  
+  Cassandra4b:
+    Condition: Build4thCassandraInProd
+    Type: 'AWS::EC2::Instance'
+    Properties:
+      AvailabilityZone: 
+        Fn::ImportValue:
+          Fn::Sub: "${NetworkStackName}-${EnvName}-Subnet2AZ"
+      SubnetId: 
+        Fn::ImportValue:
+          Fn::Sub: "${NetworkStackName}-${EnvName}-PrivateSubnet2Id"    
+      LaunchTemplate:
+        LaunchTemplateId: !Ref CassandraLaunchTemplate
+        Version: !GetAtt CassandraLaunchTemplate.LatestVersionNumber
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvName}-Cassandra4"  
+        - Key: env
+          Value: !Sub "${EnvName}"         
+
+  Cassandra5:
+    Condition: Build5thCassandra
+    Type: 'AWS::EC2::Instance'
+    Properties:
+      AvailabilityZone: 
+        Fn::ImportValue:
+          Fn::Sub: "${NetworkStackName}-${EnvName}-Subnet1AZ"
+      SubnetId: 
+        Fn::ImportValue:
+          Fn::Sub: "${NetworkStackName}-${EnvName}-PrivateSubnet1Id"    
+      LaunchTemplate:
+        LaunchTemplateId: !Ref CassandraLaunchTemplate
+        Version: !GetAtt CassandraLaunchTemplate.LatestVersionNumber
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvName}-Cassandra5"  
+        - Key: env
+          Value: !Sub "${EnvName}"  
+
+  Cassandra6a:
+    Condition: Build6thCassandraInNonProd
+    Type: 'AWS::EC2::Instance'
+    Properties:
+      AvailabilityZone: 
+        Fn::ImportValue:
+          Fn::Sub: "${NetworkStackName}-${EnvName}-Subnet1AZ"
+      SubnetId: 
+        Fn::ImportValue:
+          Fn::Sub: "${NetworkStackName}-${EnvName}-PrivateSubnet1Id"       
+      LaunchTemplate:
+        LaunchTemplateId: !Ref CassandraLaunchTemplate
+        Version: !GetAtt CassandraLaunchTemplate.LatestVersionNumber
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvName}-Cassandra6"  
+        - Key: env
+          Value: !Sub "${EnvName}"  
+  Cassandra6b:
+    Condition: Build6thCassandraInProd
+    Type: 'AWS::EC2::Instance'
+    Properties:
+      AvailabilityZone: 
+        Fn::ImportValue:
+          Fn::Sub: "${NetworkStackName}-${EnvName}-Subnet2AZ"
+      SubnetId: 
+        Fn::ImportValue:
+          Fn::Sub: "${NetworkStackName}-${EnvName}-PrivateSubnet2Id"     
+      LaunchTemplate:
+        LaunchTemplateId: !Ref CassandraLaunchTemplate
+        Version: !GetAtt CassandraLaunchTemplate.LatestVersionNumber
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvName}-Cassandra6"  
+        - Key: env
+          Value: !Sub "${EnvName}"                                        
+          
+          
+  APIGwLaunchTemplate:
+    Type: "AWS::EC2::LaunchTemplate"
+    Properties:
+      LaunchTemplateName: !Sub "${EnvName}-APIGwLaunchTemplate"
+      LaunchTemplateData:
+      #   UserData: !Base64 |
+      #     #!/bin/bash -x
+      #     yum install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm
+      #     yum-config-manager --enable epel
+      #     yum install telnet -y
+      #     yum install java -y
+      #     yum install iftop -yum
+      #     yum install tcpdump -y
+        KeyName: !Ref APIGwSSHKey
+        ImageId: !Ref APIGwAMI
+        BlockDeviceMappings:
+          -
+            DeviceName: "/dev/sda1"
+            Ebs:
+              VolumeSize: !Ref APIGwRootStorage
+              VolumeType: gp2
+        InstanceType: !Ref APIGwInstanceType
+        SecurityGroupIds:
+          - !GetAtt APIGwSG.GroupId
+      
+  APIGwSG:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: 'Limits external access to API Gateway'
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 
+            Fn::ImportValue:
+              Fn::Sub: "${NetworkStackName}-${EnvName}-MainVPCCidrBlock"
+        - IpProtocol: ICMP
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 
+            Fn::ImportValue:
+              Fn::Sub: "${NetworkStackName}-${EnvName}-MainVPCCidrBlock"            
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: !Ref APIGwTrafficAllowedIP
+        - IpProtocol: tcp
+          FromPort: 8090
+          ToPort: 8090
+          CidrIp: !Ref APIGwTrafficAllowedIP
+        - IpProtocol: tcp
+          FromPort: 8065
+          ToPort: 8065
+          CidrIp: !Ref APIGwTrafficAllowedIP
+        - IpProtocol: tcp
+          FromPort: 8075
+          ToPort: 8075
+          CidrIp: !Ref APIGwTrafficAllowedIP  
+        - IpProtocol: tcp
+          FromPort: 8089
+          ToPort: 8089
+          CidrIp: !Ref APIGwTrafficAllowedIP        
+      # VpcId: !Ref VpcId
+      VpcId: 
+        Fn::ImportValue:
+          Fn::Sub: "${NetworkStackName}-${EnvName}-VPCId"
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvName}-APIGwSecurityGroup"
+        - Key: env
+          Value: !Sub "${EnvName}"  
+
+  APIGw1:
+    Type: 'AWS::EC2::Instance'
+    Properties:
+      AvailabilityZone: 
+        Fn::ImportValue:
+          Fn::Sub: "${NetworkStackName}-${EnvName}-Subnet1AZ"
+      SubnetId: 
+        Fn::ImportValue:
+          Fn::Sub: "${NetworkStackName}-${EnvName}-PrivateSubnet1Id"    
+      LaunchTemplate:
+        LaunchTemplateId: !Ref APIGwLaunchTemplate
+        Version: !GetAtt APIGwLaunchTemplate.LatestVersionNumber
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvName}-APIGw1"  
+        - Key: env
+          Value: !Sub "${EnvName}" 
+
+  APIGw2a:
+    Condition: CreateNonProdResources
+    Type: 'AWS::EC2::Instance'
+    Properties:
+      AvailabilityZone: 
+        Fn::ImportValue:
+          Fn::Sub: "${NetworkStackName}-${EnvName}-Subnet1AZ"
+      SubnetId: 
+        Fn::ImportValue:
+          Fn::Sub: "${NetworkStackName}-${EnvName}-PrivateSubnet1Id"
+      LaunchTemplate:
+        LaunchTemplateId: !Ref APIGwLaunchTemplate
+        Version: !GetAtt APIGwLaunchTemplate.LatestVersionNumber
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvName}-APIGw2"  
+        - Key: env
+          Value: !Sub "${EnvName}"  
+  APIGw2b:
+    Condition: CreateProdResources
+    Type: 'AWS::EC2::Instance'
+    Properties:
+      AvailabilityZone: 
+        Fn::ImportValue:
+          Fn::Sub: "${NetworkStackName}-${EnvName}-Subnet2AZ"
+      SubnetId: 
+        Fn::ImportValue:
+          Fn::Sub: "${NetworkStackName}-${EnvName}-PrivateSubnet2Id"
+      LaunchTemplate:
+        LaunchTemplateId: !Ref APIGwLaunchTemplate
+        Version: !GetAtt APIGwLaunchTemplate.LatestVersionNumber
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvName}-APIGw2"  
+        - Key: env
+          Value: !Sub "${EnvName}"          
+  
+  EALaunchTemplate:
+    Type: "AWS::EC2::LaunchTemplate"
+    Properties:
+      LaunchTemplateName: !Sub "${EnvName}-EALaunchTemplate"
+      LaunchTemplateData:
+      #   UserData: !Base64 |
+      #     #!/bin/bash -x
+      #     yum install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm
+      #     yum-config-manager --enable epel
+      #     yum install telnet -y
+      #     yum install java -y
+      #     yum install iftop -yum
+      #     yum install tcpdump -y
+        KeyName: !Ref EASSHKey
+        ImageId: !Ref EAAMI
+        BlockDeviceMappings:
+          -
+            DeviceName: "/dev/sda1"
+            Ebs:
+              VolumeSize: !Ref EARootStorage
+              VolumeType: gp2
+        InstanceType: !Ref EAInstanceType
+        SecurityGroupIds:
+          - !GetAtt EASG.GroupId
+      
+  EASG:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: 'Limits external access to Embedded Analytics'
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 
+            Fn::ImportValue:
+              Fn::Sub: "${NetworkStackName}-${EnvName}-MainVPCCidrBlock"
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: !Ref APIGwTrafficAllowedIP
+        - IpProtocol: tcp
+          FromPort: 8443
+          ToPort: 8443
+          CidrIp: !Ref APIGwTrafficAllowedIP
+        - IpProtocol: tcp
+          FromPort: 5044
+          ToPort: 5044
+          CidrIp: !Ref APIGwTrafficAllowedIP     
+      # VpcId: !Ref VpcId
+      VpcId: 
+        Fn::ImportValue:
+          Fn::Sub: "${NetworkStackName}-${EnvName}-VPCId"
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvName}-EASecurityGroup"
+
+  EA:
+    Type: 'AWS::EC2::Instance'
+    Properties:
+      AvailabilityZone: 
+        Fn::ImportValue:
+          Fn::Sub: "${NetworkStackName}-${EnvName}-Subnet1AZ"
+      SubnetId: 
+        Fn::ImportValue:
+          Fn::Sub: "${NetworkStackName}-${EnvName}-PrivateSubnet1Id"    
+      LaunchTemplate:
+        LaunchTemplateId: !Ref APIGwLaunchTemplate
+        Version: !GetAtt APIGwLaunchTemplate.LatestVersionNumber
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvName}-EA"  
+        - Key: env
+          Value: !Sub "${EnvName}"           
+
+
+###### OUTPUTS SECTION ######
+
+Outputs:
+  CassandraSecurityGroup:
+    Description: The ID of the Cassandra security group
+    Value: !GetAtt CassandraSG.GroupId
+    Export:
+      Name: !Sub "${AWS::StackName}-${EnvName}-CassandraSG"     
+  APIGatewaySecurityGroup:
+    Description: The ID of the API Gateway security group
+    Value: !GetAtt APIGwSG.GroupId
+    Export:
+      Name: !Sub "${AWS::StackName}-${EnvName}-APIGwSG" 
+  EmbeddedAnalyticsSecurityGroup:
+    Description: The ID of the EA security group
+    Value: !GetAtt EASG.GroupId
+    Export:
+      Name: !Sub "${AWS::StackName}-${EnvName}-EASG"   
+  APIGw1:
+    Description: The ID of the API Gateway security group
+    Value: !Ref APIGw1
+    Export:
+      Name: !Sub "${AWS::StackName}-${EnvName}-APIGw1"          
+  APIGw2a:
+    Condition: CreateNonProdResources
+    Description: The ID of the API Gateway security group
+    Value: !Ref APIGw2a
+    Export:
+      Name: !Sub "${AWS::StackName}-${EnvName}-APIGw2"
+  APIGw2b:
+    Condition: CreateProdResources
+    Description: The ID of the API Gateway security group
+    Value: !Ref APIGw2b
+    Export:
+      Name: !Sub "${AWS::StackName}-${EnvName}-APIGw2"     
